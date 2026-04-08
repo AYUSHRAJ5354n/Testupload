@@ -57,7 +57,6 @@ def get_animexin():
             if not title or not link:
                 continue
 
-            # ONLY real episodes (ignore recommendations)
             if "episode" in title.lower() and "?" not in title:
                 posts.append((title, link))
 
@@ -198,7 +197,7 @@ async def clean(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🧹 Database cleaned")
 
 # ========= MAIN =========
-async def main():
+def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
@@ -208,21 +207,14 @@ async def main():
 
     print("🔥 Bot Running...")
 
-    await app.initialize()
-    await app.start()
+    async def post_init(app):
+        asyncio.create_task(worker(app))
+        asyncio.create_task(auto_loop())
 
-    # FIXED polling
-    await app.bot.delete_webhook(drop_pending_updates=True)
-    asyncio.create_task(app.run_polling())
+    app.post_init = post_init
 
-    # background tasks
-    asyncio.create_task(worker(app))
-    asyncio.create_task(auto_loop())
-
-    # keep alive
-    while True:
-        await asyncio.sleep(3600)
+    app.run_polling()
 
 # ========= RUN =========
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
