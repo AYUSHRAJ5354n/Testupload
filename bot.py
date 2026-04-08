@@ -43,18 +43,24 @@ def cleanup():
 # ========= SCRAPER =========
 def get_animexin():
     url = "https://animexin.dev/"
-    r = requests.get(url)
+    r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"})
     soup = BeautifulSoup(r.text, "html.parser")
 
     posts = []
 
-    for card in soup.select(".bs .bsx"):
+    for card in soup.select("article"):
         try:
-            title = card.select_one(".tt").text.strip()
-            link = card.find("a")["href"]
+            a = card.find("a")
+            title = a.get("title", "").strip()
+            link = a.get("href")
 
-            if re.search(r'episode\s*\d+', title.lower()):
+            if not title or not link:
+                continue
+
+            # ONLY real episodes (ignore recommendations)
+            if "episode" in title.lower() and "?" not in title:
                 posts.append((title, link))
+
         except:
             continue
 
@@ -62,7 +68,7 @@ def get_animexin():
 
 # ========= EXTRACT =========
 def get_dm(page):
-    r = requests.get(page)
+    r = requests.get(page, headers={"User-Agent": "Mozilla/5.0"})
     soup = BeautifulSoup(r.text, "html.parser")
 
     iframe = soup.find("iframe")
@@ -205,10 +211,17 @@ async def main():
     await app.initialize()
     await app.start()
 
+    # FIXED polling
+    await app.bot.delete_webhook(drop_pending_updates=True)
+    asyncio.create_task(app.run_polling())
+
+    # background tasks
     asyncio.create_task(worker(app))
     asyncio.create_task(auto_loop())
 
-    await app.updater.start_polling()
+    # keep alive
+    while True:
+        await asyncio.sleep(3600)
 
 # ========= RUN =========
 if __name__ == "__main__":
