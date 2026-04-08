@@ -33,12 +33,12 @@ def progress_bar(percent):
 
 # ========= CLEANUP =========
 def cleanup():
-    files = glob.glob("*.mp4") + glob.glob("*.mkv") + glob.glob("*.webm") + glob.glob("*.part")
-    for f in files:
-        try:
-            os.remove(f)
-        except:
-            pass
+    for f in glob.glob("*"):
+        if f.endswith((".mp4", ".mkv", ".webm", ".part")):
+            try:
+                os.remove(f)
+            except:
+                pass
 
 # ========= SCRAPER =========
 def get_animexin():
@@ -59,7 +59,6 @@ def get_animexin():
 
             if "episode" in title.lower() and "?" not in title:
                 posts.append((title, link))
-
         except:
             continue
 
@@ -80,6 +79,7 @@ def get_dm(page):
 
 # ========= DOWNLOAD =========
 async def download_video(url, msg, loop):
+
     def hook(d):
         if d['status'] == 'downloading':
             percent = d.get('_percent_str', '0%')
@@ -96,12 +96,22 @@ async def download_video(url, msg, loop):
             )
 
     ydl_opts = {
-        "format": "best[height<=480]",
+        # ⚡ FAST + LOW CPU
+        "format": "worst[height<=480]",
+
         "outtmpl": "video.%(ext)s",
-        "progress_hooks": [hook],
         "quiet": True,
         "noplaylist": True,
-        "nopart": True
+
+        # 🔥 HLS FIX
+        "concurrent_fragment_downloads": 5,
+        "fragment_retries": 5,
+        "retries": 5,
+        "hls_prefer_native": True,
+        "socket_timeout": 20,
+
+        # ❌ NO HEAVY PROCESSING
+        "postprocessors": [],
     }
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
