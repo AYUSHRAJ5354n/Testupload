@@ -7,7 +7,7 @@ from pymongo import MongoClient
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import threading
 
-# ===== CONFIG FROM ENV =====
+# ========= ENV =========
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 MONGO_URL = os.getenv("MONGO_URL")
@@ -19,7 +19,7 @@ col = db["uploaded"]
 queue = []
 running = False
 
-# ===== HEALTH SERVER (KOYEB FIX) =====
+# ========= HEALTH SERVER =========
 def run_server():
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
@@ -32,7 +32,31 @@ def run_server():
 
 threading.Thread(target=run_server).start()
 
-# ===== TELEGRAM =====
+# ========= FFMPEG AUTO SETUP =========
+def setup_ffmpeg():
+    if not os.path.exists("ffmpeg"):
+        print("⬇️ Downloading ffmpeg...")
+
+        url = "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz"
+        r = requests.get(url, stream=True)
+
+        with open("ffmpeg.tar.xz", "wb") as f:
+            for chunk in r.iter_content(1024 * 1024):
+                f.write(chunk)
+
+        print("📦 Extracting ffmpeg...")
+        os.system("tar -xf ffmpeg.tar.xz")
+
+        for folder in os.listdir():
+            if folder.startswith("ffmpeg-"):
+                os.rename(f"{folder}/ffmpeg", "ffmpeg")
+                break
+
+        os.chmod("ffmpeg", 0o755)
+
+setup_ffmpeg()
+
+# ========= TELEGRAM =========
 def send_msg(text):
     requests.post(
         f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
@@ -47,7 +71,7 @@ def send_video(file, caption):
             files={"video": v}
         )
 
-# ===== SCRAPER (ANIMEXIN ONLY) =====
+# ========= SCRAPER =========
 def get_animexin():
     url = "https://animexin.dev/"
     r = requests.get(url)
@@ -59,13 +83,12 @@ def get_animexin():
         title = a.get_text().strip()
         link = a.get("href")
 
-        # strict filter
         if re.search(r'episode\s*\d+', title.lower()):
             posts.append((title, link))
 
     return posts
 
-# ===== EXTRACT DM =====
+# ========= EXTRACT DM =========
 def get_dm(page):
     r = requests.get(page)
     soup = BeautifulSoup(r.text, "html.parser")
@@ -79,20 +102,20 @@ def get_dm(page):
 
     return None
 
-# ===== GET M3U8 =====
+# ========= GET M3U8 =========
 def get_m3u8(dm):
     vid = dm.split("/")[-1]
     api = f"https://www.dailymotion.com/player/metadata/video/{vid}"
     data = requests.get(api).json()
     return data["qualities"]["auto"][0]["url"]
 
-# ===== DOWNLOAD =====
+# ========= DOWNLOAD =========
 def download(m3u8):
-    cmd = f'ffmpeg -loglevel error -i "{m3u8}" -vf scale=-2:480 -c:v libx264 -preset veryfast -crf 28 video.mp4'
+    cmd = f'./ffmpeg -loglevel error -i "{m3u8}" -vf scale=-2:480 -c:v libx264 -preset veryfast -crf 28 video.mp4'
     os.system(cmd)
     return "video.mp4" if os.path.exists("video.mp4") else None
 
-# ===== WORKER =====
+# ========= WORKER =========
 async def worker():
     global running
 
@@ -136,7 +159,7 @@ async def worker():
 
         await asyncio.sleep(5)
 
-# ===== SCRAPER LOOP =====
+# ========= SCRAPER LOOP =========
 async def scraper():
     while True:
         posts = get_animexin()
@@ -147,7 +170,7 @@ async def scraper():
 
         await asyncio.sleep(600)
 
-# ===== COMMAND HANDLER =====
+# ========= COMMANDS =========
 def handle_cmd(text):
     if text == "/update":
         posts = get_animexin()
@@ -164,9 +187,9 @@ def handle_cmd(text):
         send_msg("🧹 Database cleared")
 
     elif text == "/start":
-        send_msg("🔥 Animexin Auto Bot\nOwner only")
+        send_msg("🔥 Animexin Auto Bot Ready")
 
-# ===== TELEGRAM LISTENER =====
+# ========= TELEGRAM LISTENER =========
 async def telegram_listener():
     last_id = 0
 
@@ -184,7 +207,7 @@ async def telegram_listener():
 
         await asyncio.sleep(3)
 
-# ===== MAIN =====
+# ========= MAIN =========
 async def main():
     send_msg("🔥 Bot Started")
 
