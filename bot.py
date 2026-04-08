@@ -1,14 +1,15 @@
 import os
 import re
 import asyncio
+import glob
 import requests
-import subprocess
+import yt_dlp
 from bs4 import BeautifulSoup
 from pymongo import MongoClient
-from http.server import BaseHTTPRequestHandler, HTTPServer
-import threading
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-# ========= ENV =========
+# ========= CONFIG =========
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 MONGO_URL = os.getenv("MONGO_URL")
@@ -20,49 +21,21 @@ col = db["uploaded"]
 queue = []
 running = False
 
-# ========= HEALTH SERVER =========
-def run_server():
-    class Handler(BaseHTTPRequestHandler):
-        def do_GET(self):
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(b"OK")
+# ========= PROGRESS BAR =========
+def progress_bar(percent):
+    percent = float(percent.replace('%', '').strip())
+    filled = int(percent // 10)
+    bar = "█" * filled + "░" * (10 - filled)
+    return f"{bar} {percent:.1f}%"
 
-    server = HTTPServer(("0.0.0.0", 8000), Handler)
-    server.serve_forever()
-
-threading.Thread(target=run_server).start()
-
-# ========= SAFE FFMPEG =========
-def setup_ffmpeg():
-    if not os.path.exists("ffmpeg"):
-        print("⬇️ Downloading ffmpeg...")
-
-        url = "https://github.com/eugeneware/ffmpeg-static/releases/latest/download/ffmpeg-linux-x64"
-        r = requests.get(url)
-
-        with open("ffmpeg", "wb") as f:
-            f.write(r.content)
-
-        os.chmod("ffmpeg", 0o755)
-        print("✅ ffmpeg ready")
-
-setup_ffmpeg()
-
-# ========= TELEGRAM =========
-def send_msg(text):
-    requests.post(
-        f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-        data={"chat_id": CHAT_ID, "text": text}
-    )
-
-def send_video(file, caption):
-    with open(file, "rb") as v:
-        requests.post(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/sendVideo",
-            data={"chat_id": CHAT_ID, "caption": caption},
-            files={"video": v}
-        )
+# ========= CLEANUP =========
+def cleanup():
+    files = glob.glob("*.mp4") + glob.glob("*.mkv") + glob.glob("*.webm") + glob.glob("*.part")
+    for f in files:
+        try:
+            os.remove(f)
+        except:
+            pass
 
 # ========= SCRAPER =========
 def get_animexin():
@@ -72,53 +45,79 @@ def get_animexin():
 
     posts = []
 
-    for a in soup.select("article a")[:10]:
-        title = a.get_text().strip()
-        link = a.get("href")
+    for card in soup.select(".bs .bsx"):
+        try:
+            title = card.select_one(".tt").text.strip()
+            link = card.find("a")["href"]
 
-        if re.search(r'episode\s*\d+', title.lower()):
-            posts.append((title, link))
+            # Only real episodes
+            if re.search(r'episode\s*\d+', title.lower()):
+                posts.append((title, link))
+        except:
+            continue
 
     return posts
 
-# ========= EXTRACT DM =========
+# ========= EXTRACT =========
 def get_dm(page):
     r = requests.get(page)
     soup = BeautifulSoup(r.text, "html.parser")
-    iframe = soup.find("iframe")
 
+    iframe = soup.find("iframe")
     if iframe:
         src = iframe.get("src")
-        if "embed" in src:
-            vid = src.split("/")[-1]
-            return f"https://www.dailymotion.com/video/{vid}"
+        if "dailymotion" in src:
+            return src.replace("embed/video", "video")
 
     return None
 
-# ========= GET M3U8 =========
-def get_m3u8(dm):
-    vid = dm.split("/")[-1]
-    api = f"https://www.dailymotion.com/player/metadata/video/{vid}"
-    data = requests.get(api).json()
-    return data["qualities"]["auto"][0]["url"]
+# ========= DOWNLOAD =========
+async def download_video(url, msg, loop):
+    def hook(d):
+        if d['status'] == 'downloading':
+            percent = d.get('_percent_str', '0%')
+            speed = d.get('_speed_str', '')
+            eta = d.get('_eta_str', '')
 
-# ========= DOWNLOAD (FAST - NO ENCODE) =========
-def download(m3u8):
-    cmd = [
-        "./ffmpeg",
-        "-loglevel", "error",
-        "-i", m3u8,
-        "-c", "copy",
-        "-bsf:a", "aac_adtstoasc",
-        "video.mp4"
-    ]
+            bar = progress_bar(percent)
 
-    subprocess.run(cmd)
+            text = f"⬇️ Downloading\n{bar}\n⚡ {speed}\n⏳ ETA {eta}"
 
-    return "video.mp4" if os.path.exists("video.mp4") else None
+            asyncio.run_coroutine_threadsafe(
+                msg.edit_text(text),
+                loop
+            )
+
+    ydl_opts = {
+        "format": "best[height<=480]",
+        "outtmpl": "video.%(ext)s",
+        "progress_hooks": [hook],
+        "quiet": True,
+        "noplaylist": True,
+        "nopart": True
+    }
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        ydl.download([url])
+
+    file = [f for f in os.listdir() if f.endswith((".mp4", ".mkv", ".webm"))][0]
+    return file
+
+# ========= UPLOAD =========
+async def upload(bot, file, msg):
+    await msg.edit_text("📤 Uploading...\n████░░░░░░ 40%")
+
+    with open(file, "rb") as f:
+        await bot.send_video(
+            chat_id=CHAT_ID,
+            video=f,
+            supports_streaming=True
+        )
+
+    await msg.edit_text("✅ Done!")
 
 # ========= WORKER =========
-async def worker():
+async def worker(app):
     global running
 
     while True:
@@ -126,43 +125,37 @@ async def worker():
             running = True
             title, link = queue.pop(0)
 
-            send_msg(f"⏳ Processing:\n{title}")
+            msg = await app.bot.send_message(
+                chat_id=CHAT_ID,
+                text=f"⏳ Processing:\n{title}"
+            )
 
             try:
-                send_msg("📡 Extracting...")
                 dm = get_dm(link)
 
                 if not dm:
-                    send_msg("❌ No video found")
+                    await msg.edit_text("❌ No video found")
                     running = False
                     continue
 
-                send_msg("📡 Getting stream...")
-                m3u8 = get_m3u8(dm)
+                file = await download_video(dm, msg, asyncio.get_event_loop())
 
-                send_msg("📥 Downloading...")
-                file = download(m3u8)
+                await upload(app.bot, file, msg)
 
-                if file:
-                    send_msg("📤 Uploading...")
-                    send_video(file, f"🔥 {title}")
-
-                    os.remove(file)
-                    col.insert_one({"url": link})
-
-                    send_msg("✅ Done!")
-                else:
-                    send_msg("❌ Download failed")
+                col.insert_one({"url": link})
 
             except Exception as e:
-                send_msg(f"❌ Error:\n{e}")
+                await msg.edit_text(f"❌ Error\n{e}")
+
+            finally:
+                cleanup()
 
             running = False
 
         await asyncio.sleep(5)
 
-# ========= SCRAPER LOOP =========
-async def scraper():
+# ========= AUTO LOOP =========
+async def auto_loop(app):
     while True:
         posts = get_animexin()
 
@@ -170,53 +163,47 @@ async def scraper():
             if not col.find_one({"url": link}):
                 queue.append((title, link))
 
-        await asyncio.sleep(600)
+        await asyncio.sleep(300)  # 5 min
 
 # ========= COMMANDS =========
-def handle_cmd(text):
-    if text == "/update":
-        posts = get_animexin()
-        for p in posts:
-            if not col.find_one({"url": p[1]}):
-                queue.append(p)
-        send_msg("🔄 Update triggered")
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🔥 Auto Donghua Bot Running")
 
-    elif text == "/stats":
-        send_msg(f"📊 Total uploaded: {col.count_documents({})}")
+async def update_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    posts = get_animexin()
 
-    elif text == "/clean":
-        col.delete_many({})
-        send_msg("🧹 Database cleared")
+    added = 0
+    for p in posts:
+        if not col.find_one({"url": p[1]}):
+            queue.append(p)
+            added += 1
 
-    elif text == "/start":
-        send_msg("🔥 Animexin Auto Bot Ready")
+    await update.message.reply_text(f"🔄 Added {added} new episodes")
 
-# ========= TELEGRAM LISTENER =========
-async def telegram_listener():
-    last_id = 0
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    count = col.count_documents({})
+    await update.message.reply_text(f"📊 Total Uploaded: {count}")
 
-    while True:
-        res = requests.get(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates?offset={last_id}"
-        ).json()
-
-        for upd in res.get("result", []):
-            last_id = upd["update_id"] + 1
-            msg = upd.get("message", {}).get("text")
-
-            if msg:
-                handle_cmd(msg)
-
-        await asyncio.sleep(3)
+async def clean(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    col.delete_many({})
+    await update.message.reply_text("🧹 Database cleaned")
 
 # ========= MAIN =========
 async def main():
-    send_msg("🔥 Bot Started")
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("update", update_cmd))
+    app.add_handler(CommandHandler("stats", stats))
+    app.add_handler(CommandHandler("clean", clean))
+
+    print("🔥 Bot Running...")
 
     await asyncio.gather(
-        worker(),
-        scraper(),
-        telegram_listener()
+        app.initialize(),
+        app.start(),
+        worker(app),
+        auto_loop(app)
     )
 
 asyncio.run(main())
