@@ -32,27 +32,19 @@ def run_server():
 
 threading.Thread(target=run_server).start()
 
-# ========= FFMPEG AUTO SETUP =========
+# ========= SAFE FFMPEG SETUP =========
 def setup_ffmpeg():
     if not os.path.exists("ffmpeg"):
-        print("⬇️ Downloading ffmpeg...")
+        print("⬇️ Downloading ffmpeg (safe binary)...")
 
-        url = "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz"
-        r = requests.get(url, stream=True)
+        url = "https://github.com/eugeneware/ffmpeg-static/releases/latest/download/ffmpeg-linux-x64"
+        r = requests.get(url)
 
-        with open("ffmpeg.tar.xz", "wb") as f:
-            for chunk in r.iter_content(1024 * 1024):
-                f.write(chunk)
-
-        print("📦 Extracting ffmpeg...")
-        os.system("tar -xf ffmpeg.tar.xz")
-
-        for folder in os.listdir():
-            if folder.startswith("ffmpeg-"):
-                os.rename(f"{folder}/ffmpeg", "ffmpeg")
-                break
+        with open("ffmpeg", "wb") as f:
+            f.write(r.content)
 
         os.chmod("ffmpeg", 0o755)
+        print("✅ ffmpeg ready")
 
 setup_ffmpeg()
 
