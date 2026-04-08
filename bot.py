@@ -2,6 +2,7 @@ import os
 import re
 import asyncio
 import requests
+import subprocess
 from bs4 import BeautifulSoup
 from pymongo import MongoClient
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -32,10 +33,10 @@ def run_server():
 
 threading.Thread(target=run_server).start()
 
-# ========= SAFE FFMPEG SETUP =========
+# ========= SAFE FFMPEG =========
 def setup_ffmpeg():
     if not os.path.exists("ffmpeg"):
-        print("⬇️ Downloading ffmpeg (safe binary)...")
+        print("⬇️ Downloading ffmpeg...")
 
         url = "https://github.com/eugeneware/ffmpeg-static/releases/latest/download/ffmpeg-linux-x64"
         r = requests.get(url)
@@ -101,10 +102,19 @@ def get_m3u8(dm):
     data = requests.get(api).json()
     return data["qualities"]["auto"][0]["url"]
 
-# ========= DOWNLOAD =========
+# ========= DOWNLOAD (FAST - NO ENCODE) =========
 def download(m3u8):
-    cmd = f'./ffmpeg -loglevel error -i "{m3u8}" -vf scale=-2:480 -c:v libx264 -preset veryfast -crf 28 video.mp4'
-    os.system(cmd)
+    cmd = [
+        "./ffmpeg",
+        "-loglevel", "error",
+        "-i", m3u8,
+        "-c", "copy",
+        "-bsf:a", "aac_adtstoasc",
+        "video.mp4"
+    ]
+
+    subprocess.run(cmd)
+
     return "video.mp4" if os.path.exists("video.mp4") else None
 
 # ========= WORKER =========
