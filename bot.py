@@ -23,7 +23,10 @@ running = False
 
 # ========= PROGRESS BAR =========
 def progress_bar(percent):
-    percent = float(percent.replace('%', '').strip())
+    try:
+        percent = float(percent.replace('%', '').strip())
+    except:
+        percent = 0
     filled = int(percent // 10)
     bar = "█" * filled + "░" * (10 - filled)
     return f"{bar} {percent:.1f}%"
@@ -50,7 +53,6 @@ def get_animexin():
             title = card.select_one(".tt").text.strip()
             link = card.find("a")["href"]
 
-            # Only real episodes
             if re.search(r'episode\s*\d+', title.lower()):
                 posts.append((title, link))
         except:
@@ -105,7 +107,7 @@ async def download_video(url, msg, loop):
 
 # ========= UPLOAD =========
 async def upload(bot, file, msg):
-    await msg.edit_text("📤 Uploading...\n████░░░░░░ 40%")
+    await msg.edit_text("📤 Uploading...\n████░░░░░░")
 
     with open(file, "rb") as f:
         await bot.send_video(
@@ -155,15 +157,16 @@ async def worker(app):
         await asyncio.sleep(5)
 
 # ========= AUTO LOOP =========
-async def auto_loop(app):
+async def auto_loop():
     while True:
+        print("🔄 Checking new episodes...")
         posts = get_animexin()
 
         for title, link in posts:
             if not col.find_one({"url": link}):
                 queue.append((title, link))
 
-        await asyncio.sleep(300)  # 5 min
+        await asyncio.sleep(300)
 
 # ========= COMMANDS =========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -199,11 +202,14 @@ async def main():
 
     print("🔥 Bot Running...")
 
-    await asyncio.gather(
-        app.initialize(),
-        app.start(),
-        worker(app),
-        auto_loop(app)
-    )
+    await app.initialize()
+    await app.start()
 
-asyncio.run(main())
+    asyncio.create_task(worker(app))
+    asyncio.create_task(auto_loop())
+
+    await app.updater.start_polling()
+
+# ========= RUN =========
+if __name__ == "__main__":
+    asyncio.run(main())
